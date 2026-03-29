@@ -1,9 +1,0 @@
-C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-target-test\debug\deps\potential_utf-5d6782f2d61411a6.d: C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\lib.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\uchar.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\ustr.rs
-
-C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-target-test\debug\deps\libpotential_utf-5d6782f2d61411a6.rlib: C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\lib.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\uchar.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\ustr.rs
-
-C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-target-test\debug\deps\libpotential_utf-5d6782f2d61411a6.rmeta: C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\lib.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\uchar.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\ustr.rs
-
-C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\lib.rs:
-C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\uchar.rs:
-C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\potential_utf-0.1.4\src\ustr.rs:

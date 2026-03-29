@@ -1,7 +1,9 @@
 target/
+.cargo-target-test/
 .wrapper-data/
 .codex-home/
 .cargo-home/
+.env
 cargo-proxy.log
 rustup-init.exe
 schema/
