@@ -1,0 +1,11 @@
+target
+.cargo-home
+.codex-home
+.wrapper-data
+schema
+tests
+cargo-proxy.err.log
+cargo-proxy.out.log
+.env
+.git
+.docker-buildx

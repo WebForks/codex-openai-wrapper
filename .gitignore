@@ -1,0 +1,7 @@
+target/
+.wrapper-data/
+.codex-home/
+.cargo-home/
+cargo-proxy.log
+rustup-init.exe
+schema/

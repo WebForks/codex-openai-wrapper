@@ -1,0 +1,9 @@
+C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-target-test\debug\deps\thiserror-eae3a42d5cb1f1f4.d: C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\lib.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\aserror.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\display.rs
+
+C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-target-test\debug\deps\libthiserror-eae3a42d5cb1f1f4.rlib: C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\lib.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\aserror.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\display.rs
+
+C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-target-test\debug\deps\libthiserror-eae3a42d5cb1f1f4.rmeta: C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\lib.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\aserror.rs C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\display.rs
+
+C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\lib.rs:
+C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\aserror.rs:
+C:\Users\eliuu\Desktop\Repos\codex-openai-wrapper\.cargo-home\registry\src\127.0.0.1-d048bef0642f05cb\thiserror-1.0.69\src\display.rs:
