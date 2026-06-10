@@ -33,12 +33,12 @@ Implemented in code:
 
 Current limitation:
 
-- Anthropic compatibility is still text-first rather than full tool parity
+- Anthropic compatibility still does not aim for full tool parity, but image blocks are forwarded to Codex for actual image analysis
 
 ## Architecture
 
-- `codex exec --json` backs non-streaming completions and usage extraction
-- `codex app-server` backs streaming, model discovery, and auth status
+- `codex exec --json` backs text-only non-streaming completions and usage extraction
+- `codex app-server` backs streaming, model discovery, auth status, and image-bearing requests
 - wrapper session metadata is stored in `.wrapper-data/sessions.json`
 - `CODEX_HOME` defaults to a repo-local `.codex-home` to avoid host-environment issues
 - response-format enforcement uses Codex output schemas for both `exec` and app-server turns
@@ -55,6 +55,7 @@ Environment variables:
 - `CODEX_WRAPPER_CWD`: default working directory forwarded to Codex, default repo root
 - `WRAPPER_DATA_DIR`: wrapper state directory, default `.wrapper-data`
 - `DEFAULT_MODEL`: wrapper default model used for `model: "default"` when explicitly set; supports plain ids like `gpt-5.4` and aliases like `gpt-5.4-high`
+- `DEFAULT_REASONING_EFFORT`: optional default reasoning effort applied when a client sends `model: "default"` without its own `reasoning_effort`
 - `MODEL_CACHE_TTL_SECS`: live model cache TTL, default `30`
 - `RATE_LIMIT_REQUESTS`: max requests per rate-limit window, default `120`
 - `RATE_LIMIT_WINDOW_SECS`: rate-limit window length, default `60`
@@ -76,6 +77,8 @@ Model aliases:
 - the wrapper rewrites those aliases to the base model plus `reasoning_effort`
 - if both the alias and `reasoning_effort` are supplied, they must agree
 - `DEFAULT_MODEL` also supports the same alias format, for example `DEFAULT_MODEL=gpt-5.4-high`
+- `DEFAULT_REASONING_EFFORT` can be set separately, for example `DEFAULT_MODEL=gpt-5.4` plus `DEFAULT_REASONING_EFFORT=xhigh`
+- if `DEFAULT_MODEL` includes a reasoning suffix and `DEFAULT_REASONING_EFFORT` is also set, they must agree
 
 Upstream Codex auth:
 
@@ -216,7 +219,7 @@ Invoke-RestMethod http://127.0.0.1:8000/v1/models -Headers @{
 
 The `id` field is the model name clients should use. Reasoning aliases are accepted in requests, for example `gpt-5.4-xhigh`, but the base live model ids come from `/v1/models`.
 
-If you explicitly set `DEFAULT_MODEL`, the wrapper uses that value when a client sends `model: "default"`. If you do not set `DEFAULT_MODEL`, the wrapper continues to use Codex's live upstream default model when one is available.
+If you explicitly set `DEFAULT_MODEL`, the wrapper uses that value when a client sends `model: "default"`. `DEFAULT_REASONING_EFFORT` can also apply a default effort for `model: "default"` even when you keep the live upstream default model id. If you do not set `DEFAULT_MODEL`, the wrapper continues to use Codex's live upstream default model when one is available.
 
 ### OpenAI-compatible usage
 
@@ -617,5 +620,6 @@ docker run --rm -it \
 - runtime request-specific output schemas are written under `.wrapper-data/schemas`
 - integration coverage uses a mock Codex fixture through `cargo test`
 - `scripts/cargo_registry_proxy.py` is an optional local build helper for Windows Cargo TLS issues; it is not part of the runtime wrapper
-- Anthropic compatibility is text-first right now; richer tool and multimodal parity is a follow-up item
+- OpenAI `image_url` parts and Anthropic image blocks are forwarded to Codex app-server for real image analysis
+- Anthropic compatibility still is not full tool parity; richer parity remains a follow-up item
 - see [PLAN.md](./PLAN.md) for the implementation plan and remaining work

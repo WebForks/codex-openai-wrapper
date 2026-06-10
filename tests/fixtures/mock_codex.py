@@ -127,11 +127,20 @@ def handle_app_server():
             )
         elif method == "turn/start":
             thread_id = params["threadId"]
-            prompt = params.get("input", [{}])[0].get("text", "")
+            prompt_parts = []
+            image_count = 0
+            for item in params.get("input", []):
+                if item.get("type") == "text":
+                    prompt_parts.append(item.get("text", ""))
+                elif item.get("type") in {"image", "localImage"}:
+                    image_count += 1
+            prompt = "\n".join(part for part in prompt_parts if part)
             text = f"streamed mock: {prompt}"
             effort = params.get("effort")
             if effort:
                 text += f" [effort={effort}]"
+            if image_count:
+                text += f" [images={image_count}]"
             if params.get("outputSchema") is not None:
                 text = json.dumps({"message": "streamed mock", "prompt": prompt})
 

@@ -1,4 +1,5 @@
 target/
+target-test/
 .cargo-target-test/
 .wrapper-data/
 .codex-home/

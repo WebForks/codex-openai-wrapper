@@ -2,7 +2,7 @@ use std::{
     env, fs,
     net::TcpListener,
     path::PathBuf,
-    process::{Child, Command, Stdio},
+    process::{Child, Command},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -15,6 +15,8 @@ struct TestServer {
     base_url: String,
     api_key: String,
     temp_dir: PathBuf,
+    stdout_log: PathBuf,
+    stderr_log: PathBuf,
 }
 
 impl Drop for TestServer {
@@ -26,12 +28,20 @@ impl Drop for TestServer {
 }
 
 async fn spawn_server(rate_limit_requests: u32) -> TestServer {
-    spawn_server_with_default_model(rate_limit_requests, None).await
+    spawn_server_with_defaults(rate_limit_requests, None, None).await
 }
 
 async fn spawn_server_with_default_model(
     rate_limit_requests: u32,
     default_model: Option<&str>,
+) -> TestServer {
+    spawn_server_with_defaults(rate_limit_requests, default_model, None).await
+}
+
+async fn spawn_server_with_defaults(
+    rate_limit_requests: u32,
+    default_model: Option<&str>,
+    default_reasoning_effort: Option<&str>,
 ) -> TestServer {
     let port = free_port();
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -65,6 +75,8 @@ async fn spawn_server_with_default_model(
     .unwrap();
 
     let mut command = Command::new(binary);
+    let stdout_log = temp_dir.join("wrapper.stdout.log");
+    let stderr_log = temp_dir.join("wrapper.stderr.log");
     command
         .env("HOST", "127.0.0.1")
         .env("PORT", port.to_string())
@@ -76,11 +88,16 @@ async fn spawn_server_with_default_model(
         .env("RATE_LIMIT_REQUESTS", rate_limit_requests.to_string())
         .env("RATE_LIMIT_WINDOW_SECS", "60")
         .env("RUST_LOG", "warn")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(fs::File::create(&stdout_log).unwrap())
+        .stderr(fs::File::create(&stderr_log).unwrap());
 
     if let Some(default_model) = default_model {
         command.env("DEFAULT_MODEL", default_model);
+    }
+    if let Some(default_reasoning_effort) = default_reasoning_effort {
+        command.env("DEFAULT_REASONING_EFFORT", default_reasoning_effort);
+    } else {
+        command.env("DEFAULT_REASONING_EFFORT", "");
     }
 
     let child = command.spawn().unwrap();
@@ -90,9 +107,11 @@ async fn spawn_server_with_default_model(
         base_url: format!("http://127.0.0.1:{port}"),
         api_key: "test-key".to_string(),
         temp_dir,
+        stdout_log,
+        stderr_log,
     };
 
-    wait_for_server(&server.base_url).await;
+    wait_for_server(&server).await;
     server
 }
 
@@ -103,17 +122,19 @@ fn free_port() -> u16 {
     port
 }
 
-async fn wait_for_server(base_url: &str) {
+async fn wait_for_server(server: &TestServer) {
     let client = reqwest::Client::new();
     for _ in 0..60 {
-        if let Ok(response) = client.get(format!("{base_url}/")).send().await {
+        if let Ok(response) = client.get(format!("{}/", server.base_url)).send().await {
             if response.status().is_success() {
                 return;
             }
         }
         sleep(Duration::from_millis(250)).await;
     }
-    panic!("server did not become ready");
+    let stdout = fs::read_to_string(&server.stdout_log).unwrap_or_default();
+    let stderr = fs::read_to_string(&server.stderr_log).unwrap_or_default();
+    panic!("server did not become ready\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
 }
 
 #[tokio::test]
@@ -199,6 +220,33 @@ async fn plain_default_model_still_applies_to_default_requests() {
 }
 
 #[tokio::test]
+async fn default_reasoning_effort_env_applies_to_default_requests() {
+    let server = spawn_server_with_defaults(20, Some("gpt-5.4"), Some("xhigh")).await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!("{}/v1/chat/completions", server.base_url))
+        .bearer_auth(&server.api_key)
+        .json(&json!({
+            "model": "default",
+            "messages": [
+                { "role": "user", "content": "Use the configured default reasoning effort." }
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["model"], "gpt-5.4");
+    assert!(body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("effort=xhigh"));
+}
+
+#[tokio::test]
 async fn chat_completions_accepts_reasoning_suffix_alias() {
     let server = spawn_server(20).await;
     let client = reqwest::Client::new();
@@ -223,6 +271,83 @@ async fn chat_completions_accepts_reasoning_suffix_alias() {
         .as_str()
         .unwrap()
         .contains("effort=xhigh"));
+}
+
+#[tokio::test]
+async fn chat_completions_forwards_image_inputs_to_codex() {
+    let server = spawn_server(20).await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!("{}/v1/chat/completions", server.base_url))
+        .bearer_auth(&server.api_key)
+        .json(&json!({
+            "model": "gpt-5.4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "Analyze the attached image." },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/sample.png",
+                                "detail": "high"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.unwrap();
+    assert!(body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("[images=1]"));
+}
+
+#[tokio::test]
+async fn anthropic_messages_forward_image_inputs_to_codex() {
+    let server = spawn_server(20).await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!("{}/v1/messages", server.base_url))
+        .bearer_auth(&server.api_key)
+        .json(&json!({
+            "model": "gpt-5.4",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "Describe this image." },
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "aGVsbG8="
+                            }
+                        }
+                    ]
+                }
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.unwrap();
+    assert!(body["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("[images=1]"));
 }
 
 #[tokio::test]

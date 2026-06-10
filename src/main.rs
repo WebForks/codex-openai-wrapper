@@ -156,16 +156,35 @@ impl AppConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| cwd.clone());
         let configured_default_model = env::var("DEFAULT_MODEL").ok();
+        let configured_default_reasoning_effort =
+            parse_optional_reasoning_effort_env("DEFAULT_REASONING_EFFORT")?;
         let (default_model, default_reasoning_effort, has_explicit_default_model) =
             match configured_default_model.as_deref().map(str::trim) {
                 Some(value) if !value.is_empty() => {
                     if let Some((model, effort)) = split_model_reasoning_alias(value) {
+                        if let Some(configured_effort) =
+                            configured_default_reasoning_effort.as_deref()
+                        {
+                            if configured_effort != effort {
+                                return Err(AppError::Internal(format!(
+                                    "DEFAULT_MODEL `{value}` implies DEFAULT_REASONING_EFFORT `{effort}`, which conflicts with DEFAULT_REASONING_EFFORT `{configured_effort}`."
+                                )));
+                            }
+                        }
                         (model, Some(effort.to_string()), true)
                     } else {
-                        (value.to_string(), None, true)
+                        (
+                            value.to_string(),
+                            configured_default_reasoning_effort.clone(),
+                            true,
+                        )
                     }
                 }
-                _ => ("gpt-5.4".to_string(), None, false),
+                _ => (
+                    "gpt-5.4".to_string(),
+                    configured_default_reasoning_effort.clone(),
+                    false,
+                ),
             };
 
         // The wrapper uses a repo-local CODEX_HOME by default so Codex auth and
@@ -217,6 +236,24 @@ fn env_flag(name: &str) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn parse_optional_reasoning_effort_env(name: &str) -> AppResult<Option<String>> {
+    let Some(value) = env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    canonical_reasoning_effort(&value)
+        .map(|effort| Some(effort.to_string()))
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "{name} must be one of: minimal, low, medium, high, xhigh."
+            ))
+        })
 }
 
 #[derive(Debug, Error)]
@@ -674,7 +711,11 @@ enum MessagePart {
 #[serde(untagged)]
 enum ImageUrlPayload {
     Raw(String),
-    Object { url: String },
+    Object {
+        url: String,
+        #[serde(default)]
+        detail: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -748,10 +789,9 @@ impl AnthropicMessagesRequest {
         }
 
         for message in self.messages {
-            let rendered = render_anthropic_message_content(&message.content);
             messages.push(ChatMessage {
                 role: message.role,
-                content: MessageContent::Text(rendered),
+                content: anthropic_content_to_message_content(&message.content),
             });
         }
 
@@ -781,20 +821,20 @@ impl AnthropicMessagesRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct AnthropicMessage {
     role: String,
     content: AnthropicMessageContent,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
 enum AnthropicMessageContent {
     Text(String),
     Blocks(Vec<AnthropicContentBlock>),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
 enum AnthropicContentBlock {
     #[serde(rename = "text")]
@@ -818,12 +858,16 @@ enum AnthropicContentBlock {
     Unsupported,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct AnthropicImageSource {
     #[serde(default)]
     media_type: Option<String>,
     #[serde(default, rename = "type")]
     source_type: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1040,6 +1084,7 @@ struct ExecChatResult {
     thread_id: String,
     text: String,
     usage: ExecUsage,
+    reasoning_output_tokens: i64,
 }
 
 struct AppServerProcess {
@@ -1728,13 +1773,14 @@ fn normalize_model_and_reasoning(request: &mut ChatCompletionRequest) -> AppResu
 
 fn apply_configured_default_model(config: &AppConfig, request: &mut ChatCompletionRequest) {
     let requested_model = request.model.trim();
-    if !config.has_explicit_default_model
-        || (!requested_model.is_empty() && !requested_model.eq_ignore_ascii_case("default"))
-    {
+    if !requested_model.is_empty() && !requested_model.eq_ignore_ascii_case("default") {
         return;
     }
 
-    request.model = config.default_model.clone();
+    if config.has_explicit_default_model {
+        request.model = config.default_model.clone();
+    }
+
     if request.reasoning_effort.is_none() {
         request.reasoning_effort = config.default_reasoning_effort.clone();
     }
@@ -2026,13 +2072,23 @@ async fn anthropic_messages(
         return Ok(sse.into_response());
     }
 
-    let exec_result = run_exec_chat(
-        &state.config,
-        &request,
-        existing_session.as_ref(),
-        &prompt_bundle,
-    )
-    .await?;
+    let exec_result = if request_has_image_inputs(&request) {
+        run_app_server_chat(
+            &state.config,
+            &request,
+            existing_session.as_ref(),
+            &prompt_bundle,
+        )
+        .await?
+    } else {
+        run_exec_chat(
+            &state.config,
+            &request,
+            existing_session.as_ref(),
+            &prompt_bundle,
+        )
+        .await?
+    };
 
     if let Some(session_id) = request.session_id.clone() {
         let _ = state
@@ -2049,7 +2105,7 @@ async fn anthropic_messages(
         &state,
         &request,
         exec_result.thread_id.clone(),
-        wrapper_usage_from_exec(&exec_result.usage),
+        wrapper_usage_from_exec(&exec_result),
     );
     log_response_summary(
         "anthropic_messages",
@@ -2366,13 +2422,23 @@ async fn chat_completions(
         return Ok(sse.into_response());
     }
 
-    let exec_result = run_exec_chat(
-        &state.config,
-        &request,
-        existing_session.as_ref(),
-        &prompt_bundle,
-    )
-    .await?;
+    let exec_result = if request_has_image_inputs(&request) {
+        run_app_server_chat(
+            &state.config,
+            &request,
+            existing_session.as_ref(),
+            &prompt_bundle,
+        )
+        .await?
+    } else {
+        run_exec_chat(
+            &state.config,
+            &request,
+            existing_session.as_ref(),
+            &prompt_bundle,
+        )
+        .await?
+    };
 
     if let Some(session_id) = request.session_id.clone() {
         let _ = state
@@ -2389,7 +2455,7 @@ async fn chat_completions(
         &state,
         &request,
         exec_result.thread_id.clone(),
-        wrapper_usage_from_exec(&exec_result.usage),
+        wrapper_usage_from_exec(&exec_result),
     );
     log_response_summary(
         "chat_completions",
@@ -2400,6 +2466,7 @@ async fn chat_completions(
         &exec_result.text,
         wrapper.as_ref(),
     );
+    let openai_usage = build_openai_usage(&exec_result);
     let response = ChatCompletionResponse {
         id: format!("chatcmpl-{}", Uuid::new_v4()),
         object: "chat.completion".to_string(),
@@ -2416,7 +2483,7 @@ async fn chat_completions(
             logprobs: None,
             finish_reason: "stop".to_string(),
         }],
-        usage: build_openai_usage(&exec_result.usage),
+        usage: openai_usage,
         service_tier: "default".to_string(),
         wrapper,
     };
@@ -2548,6 +2615,68 @@ fn build_prompt_bundle(
     })
 }
 
+fn anthropic_content_to_message_content(content: &AnthropicMessageContent) -> MessageContent {
+    match content {
+        AnthropicMessageContent::Text(text) => MessageContent::Text(text.clone()),
+        AnthropicMessageContent::Blocks(blocks) => {
+            let mut parts = Vec::new();
+            for block in blocks {
+                match block {
+                    AnthropicContentBlock::Text { text } => {
+                        parts.push(MessagePart::Text { text: text.clone() });
+                    }
+                    AnthropicContentBlock::Image { source } => {
+                        if let Some(image_url) = anthropic_image_source_to_payload(source) {
+                            parts.push(MessagePart::ImageUrl { image_url });
+                        } else {
+                            parts.push(MessagePart::Text {
+                                text: "[Anthropic image block omitted]".to_string(),
+                            });
+                        }
+                    }
+                    AnthropicContentBlock::ToolUse { id, name, input } => {
+                        parts.push(MessagePart::Text {
+                            text: format!("[Anthropic tool_use {name} ({id})]\n{}", input),
+                        });
+                    }
+                    AnthropicContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                    } => {
+                        parts.push(MessagePart::Text {
+                            text: format!("[Anthropic tool_result for {tool_use_id}]\n{}", content),
+                        });
+                    }
+                    AnthropicContentBlock::Unsupported => {}
+                }
+            }
+
+            MessageContent::Parts(parts)
+        }
+    }
+}
+
+fn anthropic_image_source_to_payload(source: &AnthropicImageSource) -> Option<ImageUrlPayload> {
+    match source.source_type.as_deref() {
+        Some("base64") => {
+            let media_type = source.media_type.as_deref().unwrap_or("image/png");
+            let data = source.data.as_deref()?;
+            Some(ImageUrlPayload::Object {
+                url: format!("data:{media_type};base64,{data}"),
+                detail: None,
+            })
+        }
+        Some("url") => source.url.as_ref().map(|url| ImageUrlPayload::Object {
+            url: url.clone(),
+            detail: None,
+        }),
+        _ => source.url.as_ref().map(|url| ImageUrlPayload::Object {
+            url: url.clone(),
+            detail: None,
+        }),
+    }
+}
+
 fn normalize_message_text(message: &ChatMessage) -> String {
     match &message.content {
         MessageContent::Text(text) => text.clone(),
@@ -2555,10 +2684,10 @@ fn normalize_message_text(message: &ChatMessage) -> String {
             .iter()
             .filter_map(|part| match part {
                 MessagePart::Text { text } => Some(text.clone()),
-                MessagePart::ImageUrl { image_url } => Some(match image_url {
-                    ImageUrlPayload::Raw(url) => format!("[Image URL: {url}]"),
-                    ImageUrlPayload::Object { url } => format!("[Image URL: {url}]"),
-                }),
+                MessagePart::ImageUrl { image_url } => Some(format!(
+                    "[Image attached: {}]",
+                    summarize_image_payload(image_url)
+                )),
                 MessagePart::Unsupported => None,
             })
             .collect::<Vec<_>>()
@@ -2566,35 +2695,20 @@ fn normalize_message_text(message: &ChatMessage) -> String {
     }
 }
 
-fn render_anthropic_message_content(content: &AnthropicMessageContent) -> String {
-    match content {
-        AnthropicMessageContent::Text(text) => text.clone(),
-        AnthropicMessageContent::Blocks(blocks) => blocks
-            .iter()
-            .filter_map(|block| match block {
-                AnthropicContentBlock::Text { text } => Some(text.clone()),
-                AnthropicContentBlock::Image { source } => Some(format!(
-                    "[Anthropic image block: {} ({})]",
-                    source
-                        .media_type
-                        .as_deref()
-                        .unwrap_or("image payload omitted"),
-                    source.source_type.as_deref().unwrap_or("unknown source")
-                )),
-                AnthropicContentBlock::ToolUse { id, name, input } => {
-                    Some(format!("[Anthropic tool_use {name} ({id})]\n{}", input))
-                }
-                AnthropicContentBlock::ToolResult {
-                    tool_use_id,
-                    content,
-                } => Some(format!(
-                    "[Anthropic tool_result for {tool_use_id}]\n{}",
-                    content
-                )),
-                AnthropicContentBlock::Unsupported => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+fn summarize_image_payload(image_url: &ImageUrlPayload) -> String {
+    let url = match image_url {
+        ImageUrlPayload::Raw(url) => url.as_str(),
+        ImageUrlPayload::Object { url, .. } => url.as_str(),
+    };
+
+    if url.starts_with("data:") {
+        return "embedded image data".to_string();
+    }
+
+    if url.len() > 120 {
+        format!("{}...", &url[..120])
+    } else {
+        url.to_string()
     }
 }
 
@@ -2620,17 +2734,17 @@ fn capitalize_role(role: &str) -> String {
     }
 }
 
-fn build_openai_usage(usage: &ExecUsage) -> UsageBlock {
+fn build_openai_usage(result: &ExecChatResult) -> UsageBlock {
     UsageBlock {
-        prompt_tokens: usage.input_tokens,
-        completion_tokens: usage.output_tokens,
-        total_tokens: usage.input_tokens + usage.output_tokens,
+        prompt_tokens: result.usage.input_tokens,
+        completion_tokens: result.usage.output_tokens,
+        total_tokens: result.usage.input_tokens + result.usage.output_tokens,
         prompt_tokens_details: PromptTokensDetails {
-            cached_tokens: usage.cached_input_tokens,
+            cached_tokens: result.usage.cached_input_tokens,
             audio_tokens: 0,
         },
         completion_tokens_details: CompletionTokensDetails {
-            reasoning_tokens: 0,
+            reasoning_tokens: result.reasoning_output_tokens,
             audio_tokens: 0,
             accepted_prediction_tokens: 0,
             rejected_prediction_tokens: 0,
@@ -2748,12 +2862,12 @@ async fn materialize_output_schema_file(
     Ok(Some(path))
 }
 
-fn wrapper_usage_from_exec(usage: &ExecUsage) -> WrapperUsageMetadata {
+fn wrapper_usage_from_exec(result: &ExecChatResult) -> WrapperUsageMetadata {
     WrapperUsageMetadata {
-        input_tokens: usage.input_tokens,
-        cached_input_tokens: usage.cached_input_tokens,
-        output_tokens: usage.output_tokens,
-        reasoning_output_tokens: 0,
+        input_tokens: result.usage.input_tokens,
+        cached_input_tokens: result.usage.cached_input_tokens,
+        output_tokens: result.usage.output_tokens,
+        reasoning_output_tokens: result.reasoning_output_tokens,
     }
 }
 
@@ -3030,12 +3144,98 @@ async fn run_exec_chat(
         thread_id,
         text,
         usage,
+        reasoning_output_tokens: 0,
     })
 }
 
 struct StreamingSession {
     process: AppServerProcess,
     thread_id: String,
+}
+
+fn canonical_image_detail(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some("auto"),
+        "low" => Some("low"),
+        "high" => Some("high"),
+        "original" => Some("original"),
+        _ => None,
+    }
+}
+
+fn request_has_image_inputs(request: &ChatCompletionRequest) -> bool {
+    request
+        .messages
+        .iter()
+        .any(|message| match &message.content {
+            MessageContent::Text(_) => false,
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .any(|part| matches!(part, MessagePart::ImageUrl { .. })),
+        })
+}
+
+fn append_message_image_inputs(input: &mut Vec<Value>, message: &ChatMessage) {
+    let MessageContent::Parts(parts) = &message.content else {
+        return;
+    };
+
+    for part in parts {
+        let MessagePart::ImageUrl { image_url } = part else {
+            continue;
+        };
+
+        match image_url {
+            ImageUrlPayload::Raw(url) => {
+                input.push(json!({
+                    "type": "image",
+                    "url": url
+                }));
+            }
+            ImageUrlPayload::Object { url, detail } => {
+                let mut item = json!({
+                    "type": "image",
+                    "url": url
+                });
+                if let Some(detail) = detail
+                    .as_deref()
+                    .and_then(canonical_image_detail)
+                    .map(|detail| Value::String(detail.to_string()))
+                {
+                    item["detail"] = detail;
+                }
+                input.push(item);
+            }
+        }
+    }
+}
+
+fn build_turn_input(
+    request: &ChatCompletionRequest,
+    prompt_bundle: &PromptBundle,
+    resumed_session: bool,
+) -> Vec<Value> {
+    let mut input = vec![json!({
+        "type": "text",
+        "text": prompt_bundle.prompt.clone()
+    })];
+
+    if resumed_session {
+        if let Some(message) = request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| !matches!(message.role.as_str(), "system" | "developer"))
+        {
+            append_message_image_inputs(&mut input, message);
+        }
+    } else {
+        for message in &request.messages {
+            append_message_image_inputs(&mut input, message);
+        }
+    }
+
+    input
 }
 
 async fn start_streaming_session(
@@ -3082,17 +3282,121 @@ async fn start_streaming_session(
                 "cwd": resolve_working_directory(config, request).display().to_string(),
                 "effort": request.reasoning_effort.clone(),
                 "outputSchema": output_schema,
-                "input": [
-                    {
-                        "type": "text",
-                        "text": prompt_bundle.prompt.clone()
-                    }
-                ]
+                "input": build_turn_input(request, prompt_bundle, existing_session.is_some())
             }),
         )
         .await?;
 
     Ok(StreamingSession { process, thread_id })
+}
+
+async fn run_app_server_chat(
+    config: &AppConfig,
+    request: &ChatCompletionRequest,
+    existing_session: Option<&SessionRecord>,
+    prompt_bundle: &PromptBundle,
+) -> AppResult<ExecChatResult> {
+    let streaming =
+        start_streaming_session(config, request, existing_session, prompt_bundle).await?;
+    let mut process = streaming.process;
+    let thread_id = streaming.thread_id;
+    let mut sent_any_text = false;
+    let mut usage = StreamingUsage::default();
+    let mut response_text = String::new();
+    let mut fatal_error = None;
+
+    loop {
+        let message = match process.read_message().await {
+            Ok(message) => message,
+            Err(error) => {
+                fatal_error = Some(error.to_string());
+                break;
+            }
+        };
+
+        match message.method.as_deref() {
+            Some("item/agentMessage/delta") => {
+                if let Some(delta) = message
+                    .params
+                    .as_ref()
+                    .and_then(|value| value.get("delta"))
+                    .and_then(Value::as_str)
+                {
+                    sent_any_text = true;
+                    response_text.push_str(delta);
+                }
+            }
+            Some("thread/tokenUsage/updated") => {
+                if let Some(params) = message.params.as_ref() {
+                    update_streaming_usage(&mut usage, params);
+                }
+            }
+            Some("item/completed") => {
+                let is_agent_message = message
+                    .params
+                    .as_ref()
+                    .and_then(|value| value.pointer("/item/type"))
+                    .and_then(Value::as_str)
+                    == Some("agentMessage");
+
+                if is_agent_message && !sent_any_text {
+                    if let Some(text) = message
+                        .params
+                        .as_ref()
+                        .and_then(|value| value.pointer("/item/text"))
+                        .and_then(Value::as_str)
+                    {
+                        sent_any_text = true;
+                        response_text.push_str(text);
+                    }
+                }
+            }
+            Some("turn/completed") => {
+                break;
+            }
+            Some("error") => {
+                let will_retry = message
+                    .params
+                    .as_ref()
+                    .and_then(|value| value.get("willRetry"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+
+                if will_retry {
+                    continue;
+                }
+
+                fatal_error = Some(
+                    message
+                        .params
+                        .as_ref()
+                        .and_then(|value| value.pointer("/error/message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("Codex reported an error.")
+                        .to_string(),
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    process.shutdown().await;
+
+    if let Some(error) = fatal_error {
+        return Err(AppError::Codex(error));
+    }
+
+    Ok(ExecChatResult {
+        thread_id,
+        text: response_text,
+        usage: ExecUsage {
+            input_tokens: usage.input_tokens,
+            cached_input_tokens: usage.cached_input_tokens,
+            output_tokens: usage.output_tokens,
+        },
+        reasoning_output_tokens: usage.reasoning_output_tokens,
+    })
 }
 
 fn build_thread_config(request: &ChatCompletionRequest) -> Value {
